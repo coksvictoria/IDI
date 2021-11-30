@@ -10,7 +10,6 @@ df <- read.csv(url("https://archive.ics.uci.edu/ml/machine-learning-databases/cr
 dim(df) 
 ##show head
 head(df)
-
 # Check for missing values
 map(df, ~sum(is.na(.)))
 
