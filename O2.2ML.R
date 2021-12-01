@@ -20,15 +20,13 @@ df$V2 <- as.numeric(df$V2)
 # Check for missing values
 map(df, ~sum(is.na(.)))
 
-
 #impute missing values by mean and mode
 imp <- impute(df, classes = list(character = imputeMode(), numeric = imputeMean()))
 
 df<-imp$data
 
+##create data dictionar
 dict<-lapply(df,function(x) table(x))
-
-dict
 
 # `%||%` <- function(x, y) {
 #   if (is.null(x)) y else x
