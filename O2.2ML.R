@@ -7,6 +7,7 @@ sapply(load.libraries, require, character = TRUE)
 
 df <- read.csv(url("https://archive.ics.uci.edu/ml/machine-learning-databases/credit-screening/crx.data"),header=FALSE)
 
+##just for testing
 dim(df) 
 ##show head
 head(df)
