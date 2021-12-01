@@ -13,82 +13,102 @@ head(df)
 # Check for missing values
 map(df, ~sum(is.na(.)))
 
-##replace NA with 0
-df[is.na(df)] <- 0
-
 ##convert V2 to numeric
 df$V2 <- as.numeric(df$V2)
 
+# Check for missing values
+map(df, ~sum(is.na(.)))
 
-`%||%` <- function(x, y) {
-  if (is.null(x)) y else x
-}
+
+#impute missing values by mean and mode
+imp <- impute(df, classes = list(character = imputeMode(), numeric = imputeMean()))
+
+df<-imp$data
+
+dict<-lapply(df,function(x) table(x))
+
+dict
+
+# `%||%` <- function(x, y) {
+#   if (is.null(x)) y else x
+# }
 
 #' @importFrom dplyr .data
 transform_data <- function(train_data) {
-  train_data <- train_data %>%
-    dplyr::mutate_if(is.factor, ~ levels(.x)[.x]) %>%
-    dplyr::mutate_if(is.logical, as.character) %>%
-    dplyr::mutate_if(is.character, ~ ifelse(is.na(.x), "(Missing)", .x)) %>%
-    assertr::assert(assertr::not_na, dplyr::everything())
-  
-  col_classes <- lapply(train_data, class)
-  bad_cols <- col_classes %>%
-    purrr::discard(~ .x %in% c("numeric", "integer", "character"))
-  
-  if (length(bad_cols)) {
-    stop(glue::glue("The following columns have unsupported types:
-                       {paste0(names(bad_cols), ' (', bad_cols, ')',
-                    collapse = ',')}"),
-         call. = FALSE
-    )
-  }
-  
-  if (any(unlist(col_classes) == "character")) {
-    rec <- recipes::recipe(train_data, ~.) %>%
-      recipes::step_integer(recipes::all_nominal(),
-                            zero_based = TRUE
+    train_data <- train_data %>%
+      ##check if categorical data with levels
+      dplyr::mutate_if(is.factor, ~ levels(.x)[.x]) %>%
+      ##check if logical data eg: T or TRUE FALSE
+      dplyr::mutate_if(is.logical, as.character) %>%
+      ##chek if character and replace missing value with unkown
+      dplyr::mutate_if(is.character, ~ ifelse(is.na(.x), "Unkown", .x)) %>%
+      ##chek if character and replace missing value with mode
+      #dplyr::mutate_if(is.character, ~ ifelse(is.na(.x),getmode(.x), .x)) %>%
+      
+      assertr::assert(assertr::not_na, dplyr::everything())
+    
+    col_classes <- lapply(train_data, class)
+    
+    ##check if variable type is not in following three and add it to bad_cols list
+    bad_cols <- col_classes %>%
+      purrr::discard(~ .x %in% c("numeric", "integer", "character"))
+    
+    ##if bad_cols are not empty then print variable names
+    if (length(bad_cols)) {
+      stop(glue::glue("The following columns have unsupported types:
+                         {paste0(names(bad_cols), ' (', bad_cols, ')',
+                      collapse = ',')}"),
+           call. = FALSE
       )
-    trained_rec <- recipes::prep(rec, train_data, retain = FALSE)
-    col_info <- trained_rec$var_info %>%
-      dplyr::select(.data$variable, .data$type)
-    categorical_levels <- trained_rec$orig_lvls %>%
-      purrr::keep(~ length(.x$values) > 1) %>%
-      purrr::map("values")
-    train_data <- recipes::bake(trained_rec, train_data)
-  } else {
-    col_info <- tibble::tibble(
-      variable = names(train_data),
-      type = "numeric"
-    )
-    categorical_levels <- NULL
-  }
-  
-  list(
-    train_data = train_data,
-    metadata = list(
-      col_info = col_info,
-      categorical_levels = categorical_levels
-    )
-  )
+    }
+    
+    ## A recipe is a description of the steps to be applied to a data set in order to prepare it for data analysis.
+    if (any(unlist(col_classes) == "character")) {
+      rec <- recipes::recipe(train_data, ~.) %>%
+      recipes::step_integer(recipes::all_nominal(),zero_based = TRUE)
+      
+      trained_rec <- recipes::prep(rec, train_data, retain = FALSE)
+      
+      col_info <- trained_rec$var_info %>%
+        dplyr::select(.data$variable, .data$type)
+      
+      categorical_levels <- trained_rec$orig_lvls %>%
+        purrr::keep(~ length(.x$values) > 1) %>%
+        purrr::map("values")
+    
+      
+      train_data <- recipes::bake(trained_rec, train_data)
+        } else {
+      col_info <- tibble::tibble(variable = names(train_data),type = "numeric")
+      categorical_levels <- NULL
+        }
+    
+  list(train_data = train_data,
+    metadata = list(col_info = col_info,
+      categorical_levels = categorical_levels))
 }
 
 cleaned_df<-transform_data(df)
 
+cleaned_df$metadata
+
+cleaned_df$metadata
+
 data<-cleaned_df$train_data
 glimpse(data)
 
-class(data)
-
-summarizeColumns(data)
 # Check data types
 map(data, class)
 
 ##convert V16 to factor
 data$V16<-as.factor(data$V16)
 
-mlr::summarizeColumns(data)%>%  
-kable(escape = F, align = "c")##neat printing table
+mlr::summarizeColumns(data)
+dplyr::count(data,V1, sort = TRUE)
+
+filter(data,V1==1 & V2>30)
+
+filter(data,V11 %in% c(2,4,5))
 
 # Correlation 
 colNames <- names(df)[1:15]
