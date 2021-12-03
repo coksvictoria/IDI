@@ -1,38 +1,89 @@
 load.libraries <- c('data.table','sm','ggpubr','plyr','Hmisc','RVAideMemoire','car','MASS','ggthemes','DataExplorer','assertr',
                     'gridExtra', 'corrplot', 'GGally', 'ggplot2', 'dplyr','tidyverse','caret','ggplot2','corrplot','caTools','torch',
-                    'xgboost','mlr','parallel','parallelMap','FSelector')
+                    'xgboost','mlr','parallel','parallelMap','pROC')
 install.lib <- load.libraries[!load.libraries %in% installed.packages()]
 for(libs in install.lib) install.packages(libs, dependences = TRUE)
 sapply(load.libraries, require, character = TRUE)
 
-df <- read.csv(url("https://archive.ics.uci.edu/ml/machine-learning-databases/credit-screening/crx.data"),header=FALSE)
+column_names = c('age', 'workclass', 'USERID', 'education', 'educational-num','marital-status', 'occupation', 'relationship', 'race', 
+                'gender','capital-gain', 'capital-loss', 'hours-per-week', 'native-country','income')
+df <- read.csv(url("https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"),header=FALSE,col.names = column_names)
+
 
 ##just for testing
-dim(df) 
+col_n<-dim(df)[2]
+
 ##show head
 head(df)
 # Check for missing values
 map(df, ~sum(is.na(.)))
 
-##convert V2 to numeric
-df$V2 <- as.numeric(df$V2)
 
-# Check for missing values
-map(df, ~sum(is.na(.)))
+##check column with single value
+col_single<-names(df)[sapply(df, function(x) length(unique(x))==1)]
+##check column with totally unique value
+col_unique<-names(df)[sapply(df, function(x) length(unique(x))==dim(df)[1])]
+##check column got too many values
+col_id<-names(df)[sapply(df, function(x) length(unique(x))>dim(df)[1]/10)]
+
+df[col_id]<-NULL
+
+col_highcor<-function(df){
+  ## Convert data.frame to a matrix with a convenient structure
+  ## (have a look at m to see where this is headed)
+  l <- lapply(df, function(X) as.numeric(factor(X, levels=unique(X))))
+  m <- as.matrix(data.frame(l))
+  
+  ## Identify pairs of perfectly correlated columns    
+  M <- (cor(m,m)>0.9)
+  M[lower.tri(M, diag=TRUE)] <- FALSE
+  
+  ## Extract the names of the redundant columns
+  col_highcor<-colnames(M)[colSums(M)>0]
+}
+
+col_highcor<-col_highcor(df)
+df[col_highcor]<-NULL
+
+##data visualization
+ggplot(data = df) + 
+  geom_point(mapping = aes(y = native.country, x = education, color=race ,alpha=workclass,shape=gender))
+#, size=hours.per.week
+##facet categorical plot
+ggplot(data = df) + 
+  geom_point(mapping = aes(y = native.country, x = education, color=race ,alpha=workclass))+
+  facet_wrap(~ gender, ncol = 2)
+
+##facet grid for plot on combination of two variables
+ggplot(data = df) + 
+  geom_point(mapping = aes(y = race, x = education, color=race ,alpha=workclass))+
+  facet_grid(marital.status ~ gender)
+
+##convert V2 to numeric
+# df$V2 <- as.numeric(df$V2)
 
 #impute missing values by mean and mode
 imp <- impute(df, classes = list(character = imputeMode(), numeric = imputeMean()))
 
 df<-imp$data
+str(df)
 
-##create data dictionar
-dict<-lapply(df,function(x) table(x))
+##feature engineering
+df$age_bucket <- as.factor(ifelse(df$age<=30,"under 30",
+                                  ifelse(df$age<=40,"31-40",
+                                         ifelse(df$age<=50,"41-50",
+                                                ifelse(df$age<=60,"51-60",
+                                                       ifelse(df$age<=65,"61-65","65+"))))))
+num_col<-names(df)[unlist(lapply(df, is.numeric))]
+cat_col<-setdiff(names(df), num_col)
+cat_col<-cat_col[cat_col!= "income"]  
 
-# `%||%` <- function(x, y) {
-#   if (is.null(x)) y else x
-# }
+##check categorical variable distribution
+xtabs(~income+age_bucket,data=df)
 
-#' @importFrom dplyr .data
+##create data dictionary
+dict<-lapply(data,function(x) as.data.frame(table(x)))
+
 transform_data <- function(train_data) {
     train_data <- train_data %>%
       ##check if categorical data with levels
@@ -83,42 +134,43 @@ transform_data <- function(train_data) {
         }
     
   list(train_data = train_data,
-    metadata = list(col_info = col_info,
-      categorical_levels = categorical_levels))
+       categorical_encoded= lapply(trained_rec$steps[[1]]$key,function(x) as.data.frame(x)),
+       col_classes=col_classes,
+    metadata = list(col_info = col_info,categorical_levels = categorical_levels))
 }
+
 
 cleaned_df<-transform_data(df)
 
-cleaned_df$metadata
+# cleaned_df$train_data
+# cleaned_df$metadata
+data_ori<-cleaned_df$train_data
+save(data_ori,file="data_ori.RData")
 
-cleaned_df$metadata
+data<-data_ori
 
-data<-cleaned_df$train_data
+str(data)
 glimpse(data)
-
-# Check data types
-map(data, class)
+map(data,typeof)
 
 ##convert V16 to factor
-data$V16<-as.factor(data$V16)
+data$income<-as.factor(data$income)
+
+data[cat_col] <- lapply(data[cat_col] , factor)
 
 mlr::summarizeColumns(data)
-dplyr::count(data,V1, sort = TRUE)
 
-filter(data,V1==1 & V2>30)
-
-filter(data,V11 %in% c(2,4,5))
+# filter(data,V1==1 & V2>30)
+# filter(data,V11 %in% c(2,4,5))
 
 # Correlation 
-colNames <- names(df)[1:15]
-for(i in colNames){
-  plt<-ggplot(data,aes_string(i,'V16')) +
-  geom_point(color= "blue", alpha = 0.3) +
-  ggtitle("Plot dataset") +
+for(i in num_col){
+  plt<-ggplot(data,aes_string(i,'income')) +
+  geom_boxplot(color= "orange", alpha = 0.3) +
+  ggtitle(paste0("box plot for ",i))+
   xlab(i) +
-  ylab("V16") +
-  theme(plot.title = element_text(color="darkred",
-                                  size=18,hjust = 0.5),
+  ylab("income") +
+  theme(plot.title = element_text(color="darkred",size=18,hjust = 0.5),
         axis.text.y = element_text(size=12),
         axis.text.x = element_text(size=12,hjust=.5),
         axis.title.x = element_text(size=14),
@@ -127,8 +179,28 @@ for(i in colNames){
   Sys.sleep(2)
   }
 
-correlations = cor(data)
-corrplot(correlations, method="color")
+
+plotdata <- df %>%
+  group_by(income, race) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n), lbl = scales::percent(pct))
+
+plotdata         
+
+ggplot(df, 
+       aes(x = income, 
+           fill = race)) + 
+  geom_bar(position = position_dodge(preserve = "single"))
+
+
+ggplot(plotdata, 
+       aes(x = income, 
+           y = pct,
+           fill = race)) + 
+  geom_bar(position = "fill") +
+  labs(y = "Proportion")
+
+
 
 # create training set indices with 80% of data
 set.seed(100)  # For reproducibility
@@ -180,12 +252,15 @@ model_glm = glm(V16 ~ . , family="binomial", data = train)
 ##The significance code '***' in the above output shows the relative importance of the feature variables.
 summary(model_glm)
 
+stepAICglm <- stepAIC(model_glm)
+summary(stepAICglm)
+
+
 #Baseline Accuracy =  Majority percentage
 prop.table(table(train$V16))
 
-
 # Predictions on the training set
-predictTrain = predict(model_glm, data = train, type = "response")
+predictTrain = predict(stepAICglm, data = train, type = "response")
 
 # Confusion matrix on training data
 table(train$V16, predictTrain >= 0.5)
@@ -197,6 +272,8 @@ predictTest = predict(model_glm, newdata = test, type = "response")
 # Confusion matrix on test set
 table(test$V16, predictTest >= 0.5)
 123/nrow(test) #Accuracy - 89%
+
+roc(income~predictTrain, data = Train, plot = TRUE, main = "ROC CURVE", col= "blue")
 
 
 #HYPERPARAMETER TUNING
