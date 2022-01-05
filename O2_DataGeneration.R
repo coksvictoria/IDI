@@ -35,6 +35,7 @@ for (i in column_names){
   return(data_distribution)
   }
 
+df_dis<-df_distribution(data,c_col)
 
 cat_generator<-function(data,i){
   temp<-sample(as.vector(unique(data[[i]])),n_samples, replace=TRUE, prob=data_dict[[i]]$Freq)
@@ -97,7 +98,7 @@ num_generator<-function(count,mean,std,min,p25,p50,p75,max){
 num_output <- matrix(ncol=length(num_col), nrow=dim(data)[1])
 
 for(i in 1:length(num_col)){
-  t<-f[[num_col[i]]]
+  t<-df_dis[[num_col[i]]]
   num_output[,i]<- round(num_generator(n_samples,t[1],t[2],t[3],t[4],t[5],t[6],t[7]))
 }
 colnames(num_output)<-num_col
@@ -107,3 +108,4 @@ y_output<-cat_generator(data,"income")
 perturbation_df<-cbind(cat_output,num_output,y_output)
 
 plot(data$hours.per.week)
+

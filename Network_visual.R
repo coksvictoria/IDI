@@ -10,20 +10,20 @@ data<-data %>%
   )
 
 ##Supplier Data
-data <- read_csv("C:/Users/xwang004/Downloads/R/Data/Supplier.csv")
-names(data)
-data<-data %>% 
-  rename(
-    source_id=COST_CENTRE,
-    source=DESCR_30,
-    destination_id=SUPP,
-    destination=NAME,
-    weight=TOTL_NETT
-  )
-
-data<-filter(data,weight>1000000)
-
-data
+# data <- read_csv("C:/Users/xwang004/Downloads/R/Data/Supplier.csv")
+# names(data)
+# data<-data %>% 
+#   rename(
+#     source_id=COST_CENTRE,
+#     source=DESCR_30,
+#     destination_id=SUPP,
+#     destination=NAME,
+#     weight=TOTL_NETT
+#   )
+# 
+# data<-filter(data,weight>1000000)
+# 
+# data
 
 sources <-select(data,source_id, source,weight)
 sources$name<-"C"
