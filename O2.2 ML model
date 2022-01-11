@@ -1,7 +1,0 @@
-load.libraries <- c('torch')
-install.lib <- load.libraries[!load.libraries %in% installed.packages()]
-for(libs in install.lib) install.packages(libs, dependences = TRUE)
-sapply(load.libraries, require, character = TRUE)
-#update.packages('gtable')
-
-df <- read.csv(url("https://archive.ics.uci.edu/ml/machine-learning-databases/credit-screening/crx.data"),header=FALSE)
