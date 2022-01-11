@@ -49,6 +49,8 @@ for(i in 1:length(cat_col)){
 }
 colnames(cat_output)<-cat_col
 
+##here another number generator with assumed distribution
+##https://github.com/jknowles/datasynthR
 
 num_generator<-function(count,mean,std,min,p25,p50,p75,max){
   #Positions of the percentiles
@@ -105,7 +107,12 @@ colnames(num_output)<-num_col
 
 y_output<-cat_generator(data,"income")
 
-perturbation_df<-cbind(cat_output,num_output,y_output)
+perturbation_df<-as_tibble(cbind(cat_output,num_output,y_output))
 
-plot(data$hours.per.week)
+perturbation_df<-rename(perturbation_df,income=y_output)
+
+perturbation_df<-perturbation_df[,colnames(data)]
+
+save(perturbation_df,file="perturbation_df.RData")
+
 

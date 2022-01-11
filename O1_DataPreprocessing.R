@@ -3,6 +3,8 @@ install.lib <- load.libraries[!load.libraries %in% installed.packages()]
 for(libs in install.lib) install.packages(libs, dependences = TRUE)
 sapply(load.libraries, require, character = TRUE)
 
+setwd('//corp.ssi.govt.nz/usersx/xwang004/Documents/Github/IDI')
+
 column_names = c('age', 'workclass', 'USERID', 'education', 'educational-num','marital-status', 'occupation', 'relationship', 'race', 
                 'gender','capital-gain', 'capital-loss', 'hours-per-week', 'native-country','income')
 df <- read.csv(url("https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"),header=FALSE,col.names = column_names)
