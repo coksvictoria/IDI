@@ -1,16 +1,15 @@
-load.libraries <- c('dplyr','tidyverse','DMwR','reshape2')
+load.libraries <- c('dplyr','tidyverse','reshape2','recipes','smotefamily','themis','synthpop')
 install.lib <- load.libraries[!load.libraries %in% installed.packages()]
 for(libs in install.lib) install.packages(libs, dependences = TRUE)
 sapply(load.libraries, require, character = TRUE)
 
 
-
-load("data_dict.RData")
-load("data.RData")
-load("df_train.RData")
-load("df_test.RData")
-load("num_col.RData")
-load("cat_col.RData")
+load("data/data_dict.RData")
+load("data/data.RData")
+load("data/df_train.RData")
+load("data/df_test.RData")
+load("data/num_col.RData")
+load("data/cat_col.RData")
 
 data[num_col]
 data[cat_col]
@@ -23,10 +22,8 @@ data_distribution<-list()
 
 df_distribution<-function(df,c_col){
 for (i in column_names){
-  print(i)
   if (i %in% num_col) {
     temp<-melt(list(mean(df[[i]]),sd(df[[i]]),quantile(df[[i]], c(0, .25, 0.5,.75,1))))
-    print(temp)
     data_distribution[[i]]<-temp[["value"]]
   }
   else
@@ -37,21 +34,22 @@ for (i in column_names){
 
 df_dis<-df_distribution(data,c_col)
 
-cat_generator<-function(data,i){
-  temp<-sample(as.vector(unique(data[[i]])),n_samples, replace=TRUE, prob=data_dict[[i]]$Freq)
-  return(temp)}
+#######METHOD 1 Perturbation###############
 
+##Categorical columns#
+cat_generator<-function(data,i){
+  temp<-sample(as.vector(sort(unique(data[[i]]))),n_samples, replace=TRUE, prob=data_dict[[i]]$Freq)
+  return(temp)}
 
 cat_output <- matrix(ncol=length(cat_col), nrow=dim(data)[1])
 
 for(i in 1:length(cat_col)){
   cat_output[,i]<- cat_generator(data,cat_col[i])
 }
+cat_output<-as.data.frame(cat_output)
 colnames(cat_output)<-cat_col
 
-##here another number generator with assumed distribution
-##https://github.com/jknowles/datasynthR
-
+##continuous columns#
 num_generator<-function(count,mean,std,min,p25,p50,p75,max){
   #Positions of the percentiles
   P25_pos = floor(0.25 * count)
@@ -96,23 +94,77 @@ num_generator<-function(count,mean,std,min,p25,p50,p75,max){
   return(v)
 }
 
-
 num_output <- matrix(ncol=length(num_col), nrow=dim(data)[1])
 
 for(i in 1:length(num_col)){
-  t<-df_dis[[num_col[i]]]
+  t<-dist[[num_col[i]]]
   num_output[,i]<- round(num_generator(n_samples,t[1],t[2],t[3],t[4],t[5],t[6],t[7]))
 }
+num_output<-as.data.frame(num_output)
 colnames(num_output)<-num_col
 
-y_output<-cat_generator(data,"income")
+##Target column - y###
+income<-cat_generator(data,"income")
 
-perturbation_df<-as_tibble(cbind(cat_output,num_output,y_output))
+#bind all columns together##
+perturbation_df<-cbind(cat_output,num_output,income)
 
-perturbation_df<-rename(perturbation_df,income=y_output)
+perturbation_df_num <- as.data.frame(sapply(perturbation_df, as.numeric))
+save(perturbation_df_num,file="data/syn1_num.RData")
 
-perturbation_df<-perturbation_df[,colnames(data)]
+##Convert it back to original format
+for(i in cat_col){
+  print(i)
+  look<-data_dict[[i]][1]
+  perturbation_df[[i]]<-look$x[match(perturbation_df[[i]],seq_along(look$x))]
+}
+perturbation_df$income<-as.factor(perturbation_df$income)
+save(perturbation_df,file="data/syn1.RData")
 
-save(perturbation_df,file="perturbation_df.RData")
+
+##METHOD 2 - SMOTE#####
+
+data_ori <- as.data.frame(sapply(data, as.numeric))
+sort(table(data_ori$income, useNA = "always"))
+
+df_real<-data_ori
+df_fake<-data_ori
+df_real['y']<-1
+df_fake['y']<-0
+df_rff=rbind(df_real,df_fake,df_fake)
+df_rff$y <- as.factor(df_rff$y)
+
+synthetic_df<-recipe(y~., data = df_rff) %>%
+  step_smote(y, over_ratio = 1) %>%
+  prep()%>%
+  bake(new_data = NULL)
+
+synthetic_df$y<-NULL
 
 
+synthetic_df<-as.data.frame(sapply(tail(synthetic_df,n_samples),as.integer))
+
+##Convert it back to original format
+for(i in cat_col){
+  print(i)
+  look<-data_dict[[i]][1]
+  synthetic_df[[i]]<-look$x[match(synthetic_df[[i]],seq_along(look$x))]
+}
+synthetic_df$income<-as.factor(synthetic_df$income)
+
+save(synthetic_df,file="data/syn2.RData")
+
+
+##METHOD 3 Synthpop##
+# apply rules to ensure consistency
+rules.list <- list(
+  marital.status = "age < 18")
+
+rules.value.list <- list(
+  marital.status = 5)
+
+# synthesise data
+synth.obj <- syn(data, rules = rules.list, rvalues = rules.value.list, seed = 1)
+
+syn_df<-synth.obj$syn
+save(syn_df,file="data/syn3.RData")
