@@ -1,4 +1,4 @@
-load.libraries <- c( 'ggplot2', 'dplyr','tidyverse','caret','rsample')
+load.libraries <- c( 'ggplot2','tidymodels','dplyr','tidyverse','rsample','xgboost','keras','vip')
 install.lib <- load.libraries[!load.libraries %in% installed.packages()]
 for(libs in install.lib) install.packages(libs, dependences = TRUE)
 sapply(load.libraries, require, character = TRUE)
@@ -19,7 +19,6 @@ sapply(df, function(x) round(sum(is.na(x))/length(x),3))
 #replace mising value with 0 for all miss_col
 #df<-mutate(df, across(miss_col, ~ifelse(is.na(.x),0,.x)))
 
-
 ##check column with single value
 col_single<-names(df)[sapply(df, function(x) length(unique(x))==1)]
 ##check column with totally unique value
@@ -35,19 +34,52 @@ str(df)
 ##create column lists
 num_col<-names(df)[unlist(lapply(df, is.numeric))]
 cat_col<-setdiff(names(df), num_col)
+##convert call categorical into factor
+df[,cat_col]<-lapply(df[,cat_col] , factor)
 cat_col<-cat_col[cat_col!= "income"]  
 save(num_col,file="data/num_col.RData")
 save(cat_col,file="data/cat_col.RData")
 
-c(cat_col,num_col)
 
-df[,cat_col]<-lapply(df[,cat_col] , factor)
+#tidyr::replace_na(df,0)
+mlr::summarizeColumns(df)
+
+##create new variable
+df<- df %>% 
+  mutate(worktype = case_when( 
+    hours.per.week < 31 ~ "parttime",
+    hours.per.week >= 30 ~ "fulltime",
+  )) %>% 
+  mutate(worktype = as.factor(worktype)) 
+#%>%  select(-hours.per.week)
+
+
+print_boxplot <- function(.y_var){
+  # convert strings to variable
+  y_var <- sym(.y_var) 
+  # unquote variables using {{}}
+  df %>% 
+    ggplot(aes(x = income, y = {{y_var}},
+               fill = income, color = income)) +
+    geom_boxplot(alpha=0.4)}  
+
+y_var <- 
+  df %>% 
+  select(where(is.numeric)) %>% 
+  variable.names() 
+
+
+map(y_var, print_boxplot)
 
 #train/test split
 set.seed(123)
 df_split <- initial_split(df, prop = 0.8)
 df_train <- training(df_split)
 df_test <- testing(df_split)
+
+save(df,file="data/data.RData")
+save(df_train,file="data/train.RData")
+save(df_test,file="data/test.RData")
 
 ##preprocessing pipeline
 df_recipe <- recipe(df_train) %>%
@@ -57,126 +89,167 @@ df_recipe <- recipe(df_train) %>%
     c(cat_col,num_col),
     new_role = "predictor"
   ) %>%
-  step_string2factor(all_nominal(), -all_outcomes()) %>%
-  step_knnimpute(workclass,
-                 impute_with = imp_vars(
-                   num_col
-                 )
-  ) %>%
-  step_knnimpute(occupation,
-                 impute_with = imp_vars(
-                   num_col
-                 )
-  ) %>%
-  step_unknown(native.country,new_level = "unknown") %>%
-  step_other(native.country, threshold = 0.01)
+  step_impute_median(num_col)%>%
+  step_unknown(cat_col,new_level = "Unknown") %>%
+  step_other(native.country, threshold = 0.01)%>%
+  step_string2factor(all_nominal(), -all_outcomes()) 
 
-%>%
-  step_normalize(all_numeric(), -all_outcomes())
+summary(df_recipe)
 
-#https://mdneuzerling.com/post/machine-learning-pipelines-with-tidymodels-and-targets/
+prepped_data <- 
+  df_recipe%>% # use the recipe object
+  prep() %>% # perform the recipe on training data
+  juice() # extract only the preprocessed dataframe 
 
-df_recipe
-
-df_recipe %>% 
-  prep(df_train) %>%
-  bake(df_test)
+##5-fold cross validation
+set.seed(123)
+cv_folds <- vfold_cv(df_train, v = 5,strata=income)
 
 
+##Define classifiers https://www.tidymodels.org/find/parsnip/
+##logistic regression
+log_spec <- # your model specification
+  logistic_reg() %>%  # model type
+  set_engine(engine = "glm") %>%  # model engine
+  set_mode("classification") # model mode
+
+##random forest 
+rf_spec <- rand_forest(
+  trees = tune(),
+  mtry = tune(),
+  min_n=10#tune()
+) %>%
+  set_engine("ranger") %>% 
+  set_mode("classification")
+
+##XGboost
+xgb_spec <- 
+  boost_tree() %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification") 
+
+##knn
+knn_spec <- 
+  nearest_neighbor(neighbors = 4) %>% # we can adjust the number of neighbors 
+  set_engine("kknn") %>% 
+  set_mode("classification") 
+
+##MLP
+nnet_spec <-
+  mlp() %>%
+  set_mode("classification") %>% 
+  set_engine("keras", verbose = 0) 
 
 
+##define the model pipeline
+model<-log_spec
+
+clf_workflow <- workflow() %>% 
+  add_recipe(df_recipe) %>% 
+  add_model(model)
 
 
-
-##create data dictionary
-data_dict<-lapply(df,function(x) as.data.frame(prop.table(table(x))))
-save(data_dict,file="data/data_dict.RData")
-
-transform_data <- function(train_data) {
-    train_data <- train_data %>%
-      ##check if categorical data with levels
-      dplyr::mutate_if(is.factor, ~ levels(.x)[.x]) %>%
-      ##check if logical data eg: T or TRUE FALSE
-      dplyr::mutate_if(is.logical, as.character) %>%
-      ##chek if character and replace missing value with unkown
-      dplyr::mutate_if(is.character, ~ ifelse(is.na(.x), "Unkown", .x)) %>%
-      ##chek if character and replace missing value with mode
-      #dplyr::mutate_if(is.character, ~ ifelse(is.na(.x),getmode(.x), .x)) %>%
-      
-      assertr::assert(assertr::not_na, dplyr::everything())
-    
-    col_classes <- lapply(train_data, class)
-    
-    ##check if variable type is not in following three and add it to bad_cols list
-    bad_cols <- col_classes %>%
-      purrr::discard(~ .x %in% c("numeric", "integer", "character"))
-    
-    ##if bad_cols are not empty then print variable names
-    if (length(bad_cols)) {
-      stop(glue::glue("The following columns have unsupported types:
-                         {paste0(names(bad_cols), ' (', bad_cols, ')',
-                      collapse = ',')}"),
-           call. = FALSE
-      )
-    }
-    
-    ## A recipe is a description of the steps to be applied to a data set in order to prepare it for data analysis.
-    if (any(unlist(col_classes) == "character")) {
-      rec <- recipes::recipe(train_data, ~.) %>%
-      recipes::step_integer(recipes::all_nominal(),zero_based = FALSE)
-      
-      trained_rec <- recipes::prep(rec, train_data, retain = FALSE)
-      
-      col_info <- trained_rec$var_info %>%
-        dplyr::select(.data$variable, .data$type)
-      
-      categorical_levels <- trained_rec$orig_lvls %>%
-        purrr::keep(~ length(.x$values) > 1) %>%
-        purrr::map("values")
-    
-      
-      train_data <- recipes::bake(trained_rec, train_data)
-        } else {
-      col_info <- tibble::tibble(variable = names(train_data),type = "numeric")
-      categorical_levels <- NULL
-        }
-    
-  list(train_data = train_data,
-       categorical_encoded= lapply(trained_rec$steps[[1]]$key,function(x) as.data.frame(x)),
-       col_classes=col_classes,
-    metadata = list(col_info = col_info,categorical_levels = categorical_levels))
+##model training and cross validataion
+get_model <- function(x) {
+  extract_fit_parsnip(x) %>% tidy()
 }
 
+clf_res <- 
+  clf_workflow %>% 
+  fit_resamples(
+    resamples = cv_folds, 
+    metrics = yardstick::metric_set(roc_auc, yardstick::accuracy, sensitivity, specificity),
+    control = control_resamples(save_pred = TRUE,extract = get_model))
 
-cleaned_df<-transform_data(df)
 
-data_ori<-cleaned_df$train_data
-data<-data_ori
+clf_res$.extracts[[1]][[1]]
+clf_res %>%  collect_metrics(summarize = TRUE)
+clf_res %>%  collect_metrics(summarize = FALSE)
 
-column_number<-dim(data)[2]
-##convert V16 to factor
-data$income<-as.factor(data$income)
-data[cat_col] <- lapply(data[cat_col] , factor)
+pred <- clf_res %>%
+  collect_predictions()
 
-mlr::summarizeColumns(data)
+pred %>% 
+conf_mat(income,.pred_class)%>% 
+  autoplot(type = "heatmap")
 
-save(data,file="data/data.RData")
+pred %>% 
+  group_by(id) %>% # id contains our folds
+  roc_curve(income, `.pred_ <=50K`) %>% 
+  autoplot()
 
-# create training set indices with 80% of data
-set.seed(100)  # For reproducibility
-#################################METHOD 2###################
-train.index <- createDataPartition(data$income, p = .8, list = FALSE)
-train <- data[ train.index,]
-test  <- data[-train.index,]
+##plot predicted probability
+pred %>% 
+  ggplot() +
+  geom_density(aes(x = `.pred_ >50K`, 
+                   fill = income), 
+               alpha = 0.5)
 
-print(dim(train)); print(dim(test))
-save(train,file="data/train.RData")
-save(test,file="data/test.RData")
-############################################################
+last_fit_clf <- last_fit(clf_workflow, 
+                        split = df_split,
+                        metrics = yardstick::metric_set(roc_auc, yardstick::accuracy, sensitivity, specificity))
 
-#impute missing values by mean and mode
-imp <- impute(train, classes = list(factor = imputeMode(), integer = imputeMean()), dummy.classes = c("integer","factor"), dummy.type = "numeric")
-imp_train <- imp$data
+
+last_fit_clf %>% 
+  collect_metrics()
+
+last_fit_clf %>% 
+  collect_predictions() %>% 
+  roc_curve(income, `.pred_ <=50K`) %>% 
+  autoplot()
+
+
+
+##plot feature importance
+last_fit_clf %>% 
+  pluck(".workflow", 1) %>%   
+  pull_workflow_fit() %>% 
+  vip(num_features = 10)
+
+last_fit_clf$.workflow[[1]][[1]]
+
+
+##hyperparameter tuning
+#clf_grid <- expand_grid(mtry = 3:5, trees = seq(500, 1500, by = 200),min_n=seq(5,30,by=5))
+clf_grid <- expand_grid(mtry = 3:4, trees = seq(200, 1000, by = 200))
+
+
+
+clf_grid_results <- clf_workflow %>% 
+  tune_grid(
+    resamples = cv_folds,
+    grid = clf_grid,
+    metrics=metric_set(pr_auc)
+  )
+
+
+collect_metrics(clf_grid_results) %>%
+  arrange(mean) %>%
+  head() %>% 
+  knitr::kable()
+
+autoplot(clf_grid_results)
+
+show_best(clf_grid_results) %>% knitr::kable()
+
+
+##model fit
+fitted_model <- clf_workflow %>% 
+  finalize_workflow(select_by_pct_loss(clf_grid_results, metric = "pr_auc", limit = 5, trees)) %>% 
+  fit(df_train)
+
+pred<-clf_res  %>%
+  collect_predictions()
+
+metric_set(pr_auc)(df_test$income,.pred_class)
+
+
+
+
+
+
+##########################BKP############################
+
 
 ##preprocessing
 prep_rec<-recipe(~ ., data = train) %>% 
@@ -187,13 +260,9 @@ prep_rec<-recipe(~ ., data = train) %>%
   prep(data = train,retain = TRUE )
 
 tidy(prep_rec)
-
 df_train<-bake(prep_rec,train)
 df_test<-bake(prep_rec,test)
-save(df_train,file="data/df_train.RData")
-save(df_test,file="data/df_test.RData")
 
-# NonGau<- preProcess(as.data.frame(train$age), method = "BoxCox")
-# trainBC <- predict(NonGau, as.data.frame(train$age))
-# testBC <-  predict(NonGau, as.data.frame(test$age))
+
+
 
