@@ -1,4 +1,4 @@
-load.libraries <- c( 'ggplot2','tidymodels','dplyr','tidyverse','rsample','xgboost','keras','vip')
+load.libraries <- c( 'ggplot2','tidymodels','recipes','dplyr','tidyverse','rsample','xgboost','keras')
 install.lib <- load.libraries[!load.libraries %in% installed.packages()]
 for(libs in install.lib) install.packages(libs, dependences = TRUE)
 sapply(load.libraries, require, character = TRUE)
@@ -30,6 +30,8 @@ df[col_id]<-NULL
 df$educational.num<-NULL
 ##check missing value
 str(df)
+#tidyr::replace_na(df,0)
+mlr::summarizeColumns(df)
 
 ##create column lists
 num_col<-names(df)[unlist(lapply(df, is.numeric))]
@@ -41,9 +43,6 @@ save(num_col,file="data/num_col.RData")
 save(cat_col,file="data/cat_col.RData")
 
 
-#tidyr::replace_na(df,0)
-mlr::summarizeColumns(df)
-
 ##create new variable
 df<- df %>% 
   mutate(worktype = case_when( 
@@ -53,7 +52,7 @@ df<- df %>%
   mutate(worktype = as.factor(worktype)) 
 #%>%  select(-hours.per.week)
 
-
+###EDA##############
 print_boxplot <- function(.y_var){
   # convert strings to variable
   y_var <- sym(.y_var) 
@@ -82,6 +81,8 @@ save(df_train,file="data/train.RData")
 save(df_test,file="data/test.RData")
 
 ##preprocessing pipeline
+
+##data cleaning
 df_recipe <- recipe(df_train) %>%
   update_role(everything(), new_role = "support") %>% 
   update_role(income, new_role = "outcome") %>%
@@ -92,7 +93,17 @@ df_recipe <- recipe(df_train) %>%
   step_impute_median(num_col)%>%
   step_unknown(cat_col,new_level = "Unknown") %>%
   step_other(native.country, threshold = 0.01)%>%
-  step_string2factor(all_nominal(), -all_outcomes()) 
+  step_string2factor(all_nominal(), -all_outcomes())%>%
+  themis::step_smote(income)
+
+##data cleaning + dummy +smote
+df_recipe <- recipe(income~.,data=df_train) %>%
+  step_impute_median(num_col)%>%
+  step_unknown(cat_col,new_level = "Unknown") %>%
+  step_other(native.country, threshold = 0.01)%>%
+  step_string2factor(all_nominal(), -all_outcomes())%>%
+  step_dummy(all_nominal(), -income) %>%
+  themis::step_smote(income)
 
 summary(df_recipe)
 
@@ -148,26 +159,23 @@ clf_workflow <- workflow() %>%
   add_recipe(df_recipe) %>% 
   add_model(model)
 
+metrics_list <- yardstick::metric_set(roc_auc, yardstick::accuracy, sensitivity, specificity)
 
-##model training and cross validataion
+##model training and cross validation
 get_model <- function(x) {
   extract_fit_parsnip(x) %>% tidy()
 }
 
-clf_res <- 
-  clf_workflow %>% 
+clf_res <-clf_workflow %>% 
   fit_resamples(
     resamples = cv_folds, 
-    metrics = yardstick::metric_set(roc_auc, yardstick::accuracy, sensitivity, specificity),
+    metrics = metrics_list,
     control = control_resamples(save_pred = TRUE,extract = get_model))
 
+#clf_res$.extracts[[1]][[1]]
+collect_metrics(clf_res,summarize = TRUE)
 
-clf_res$.extracts[[1]][[1]]
-clf_res %>%  collect_metrics(summarize = TRUE)
-clf_res %>%  collect_metrics(summarize = FALSE)
-
-pred <- clf_res %>%
-  collect_predictions()
+pred <- clf_res %>% collect_predictions()
 
 pred %>% 
 conf_mat(income,.pred_class)%>% 
@@ -178,6 +186,14 @@ pred %>%
   roc_curve(income, `.pred_ <=50K`) %>% 
   autoplot()
 
+pred %>% 
+  group_by(id) %>% # id contains our folds
+  roc_curve(income, `.pred_ <=50K`) %>% 
+  ggplot(aes(1 - specificity, sensitivity, color = id)) +
+  geom_abline(lty = 2, color = "gray80", size = 1.5) +
+  geom_path(show.legend = FALSE, alpha = 0.6, size = 1.2) +
+  coord_equal()
+
 ##plot predicted probability
 pred %>% 
   ggplot() +
@@ -185,30 +201,30 @@ pred %>%
                    fill = income), 
                alpha = 0.5)
 
+
+
 last_fit_clf <- last_fit(clf_workflow, 
-                        split = df_split,
-                        metrics = yardstick::metric_set(roc_auc, yardstick::accuracy, sensitivity, specificity))
+                         split = df_split,
+                         metrics = metrics_list)
 
+##result
+collect_metrics(last_fit_clf)
 
-last_fit_clf %>% 
-  collect_metrics()
-
-last_fit_clf %>% 
-  collect_predictions() %>% 
-  roc_curve(income, `.pred_ <=50K`) %>% 
-  autoplot()
-
-
-
-##plot feature importance
-last_fit_clf %>% 
-  pluck(".workflow", 1) %>%   
-  pull_workflow_fit() %>% 
-  vip(num_features = 10)
-
-last_fit_clf$.workflow[[1]][[1]]
-
-
+members_final %>%
+  pull(.workflow) %>%
+  pluck(1) %>%
+  tidy() %>%
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, size = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - std.error,
+    xmax = estimate + std.error
+  ),
+  width = .2, color = "gray50", alpha = 0.7
+  ) +
+  geom_point(size = 2, color = "#85144B") +
+  labs(y = NULL, x = "Coefficent from logistic regression")
 ##hyperparameter tuning
 #clf_grid <- expand_grid(mtry = 3:5, trees = seq(500, 1500, by = 200),min_n=seq(5,30,by=5))
 clf_grid <- expand_grid(mtry = 3:4, trees = seq(200, 1000, by = 200))
@@ -233,6 +249,7 @@ autoplot(clf_grid_results)
 show_best(clf_grid_results) %>% knitr::kable()
 
 
+
 ##model fit
 fitted_model <- clf_workflow %>% 
   finalize_workflow(select_by_pct_loss(clf_grid_results, metric = "pr_auc", limit = 5, trees)) %>% 
@@ -242,11 +259,6 @@ pred<-clf_res  %>%
   collect_predictions()
 
 metric_set(pr_auc)(df_test$income,.pred_class)
-
-
-
-
-
 
 ##########################BKP############################
 
